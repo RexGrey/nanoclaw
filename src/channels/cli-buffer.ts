@@ -1,11 +1,15 @@
 /**
  * Lightweight buffer channel for CLI API hot-plug.
  * Always registered in the background process.
- * Owns `cli:*` JIDs and buffers agent responses in memory
+ * Owns hot-plug CLI JIDs and buffers agent responses in memory
  * for the HTTP API to poll.
  */
 import { registerChannel } from './registry.js';
 import { Channel } from '../types.js';
+
+export function isBufferedCliJid(jid: string): boolean {
+  return jid.startsWith('cli:http:') || jid === 'cli:api';
+}
 
 export class CliBufferChannel implements Channel {
   name = 'cli-buffer';
@@ -26,12 +30,16 @@ export class CliBufferChannel implements Channel {
     return msgs;
   }
 
+  clearResponses(jid: string): void {
+    this.responses.delete(jid);
+  }
+
   isConnected(): boolean {
     return true;
   }
 
   ownsJid(jid: string): boolean {
-    return jid.startsWith('cli:');
+    return isBufferedCliJid(jid);
   }
 
   async disconnect(): Promise<void> {}

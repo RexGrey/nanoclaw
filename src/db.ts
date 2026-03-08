@@ -147,22 +147,29 @@ export function initDatabase(): void {
 
   // Auto-backup: keep last 3 copies, rotate on startup
   if (fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0) {
-    const backupDir = path.join(STORE_DIR, 'backups');
-    fs.mkdirSync(backupDir, { recursive: true });
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const backupPath = path.join(backupDir, `messages-${timestamp}.db`);
-    fs.copyFileSync(dbPath, backupPath);
+    try {
+      const backupDir = path.join(STORE_DIR, 'backups');
+      fs.mkdirSync(backupDir, { recursive: true });
+      const timestamp = new Date()
+        .toISOString()
+        .replace(/[:.]/g, '-')
+        .slice(0, 19);
+      const backupPath = path.join(backupDir, `messages-${timestamp}.db`);
+      fs.copyFileSync(dbPath, backupPath);
 
-    // Keep only the 3 most recent backups
-    const backups = fs
-      .readdirSync(backupDir)
-      .filter((f) => f.startsWith('messages-') && f.endsWith('.db'))
-      .sort()
-      .reverse();
-    for (const old of backups.slice(3)) {
-      fs.unlinkSync(path.join(backupDir, old));
+      // Keep only the 3 most recent backups after a successful copy
+      const backups = fs
+        .readdirSync(backupDir)
+        .filter((f) => f.startsWith('messages-') && f.endsWith('.db'))
+        .sort()
+        .reverse();
+      for (const old of backups.slice(3)) {
+        fs.unlinkSync(path.join(backupDir, old));
+      }
+      logger.info({ backupPath }, 'Database backed up');
+    } catch (err) {
+      logger.warn({ dbPath, err }, 'Database backup failed; continuing startup');
     }
-    logger.info({ backupPath }, 'Database backed up');
   }
 
   db = new Database(dbPath);
@@ -669,6 +676,13 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+export function deleteRegisteredGroupsByPrefix(prefix: string): number {
+  const result = db
+    .prepare('DELETE FROM registered_groups WHERE jid LIKE ?')
+    .run(`${prefix}%`);
+  return result.changes;
 }
 
 // --- JSON migration ---

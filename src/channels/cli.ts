@@ -1,13 +1,15 @@
-import readline from 'readline';
 import crypto from 'crypto';
+
 import { registerChannel } from './registry.js';
 import { ASSISTANT_NAME } from '../config.js';
+import { InputController, TerminalRenderer } from '../cli-terminal.js';
 import { Channel, NewMessage } from '../types.js';
 import type { ChannelOpts } from './registry.js';
 
 class CliChannel implements Channel {
   name = 'cli';
-  private rl: readline.Interface | null = null;
+  private input: InputController | null = null;
+  private renderer: TerminalRenderer | null = null;
   private connected = false;
   private opts: ChannelOpts;
   private jid = 'cli:default';
@@ -18,18 +20,15 @@ class CliChannel implements Channel {
 
   /** Call after group selection menu to create readline and start accepting input */
   startPrompt(): void {
-    this.rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      prompt: 'You: ',
-    });
-
-    this.rl.prompt();
-
-    this.rl.on('line', (line) => {
+    this.input = new InputController(process.stdin, process.stdout);
+    this.renderer = new TerminalRenderer(process.stdout, this.input);
+    this.input.setSubmitHandler(async (line) => {
       const content = line.trim();
       if (!content) {
-        this.rl?.prompt();
+        return;
+      }
+      if (content === '/quit' || content === '/exit') {
+        await this.input?.close();
         return;
       }
 
@@ -50,10 +49,10 @@ class CliChannel implements Channel {
 
       this.opts.onMessage(this.jid, msg);
     });
-
-    this.rl.on('close', () => {
+    this.input.setCloseHandler(() => {
       this.connected = false;
     });
+    this.input.start();
   }
 
   async connect(): Promise<void> {
@@ -64,8 +63,7 @@ class CliChannel implements Channel {
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.connected) return;
     const prefix = jid !== this.jid ? `[${jid}] ` : '';
-    console.log(`\n${prefix}${ASSISTANT_NAME}: ${text}\n`);
-    this.rl?.prompt();
+    this.renderer?.message(ASSISTANT_NAME, `${prefix}${text}`);
   }
 
   isConnected(): boolean {
@@ -79,12 +77,14 @@ class CliChannel implements Channel {
   async setTyping(_jid: string, isTyping: boolean): Promise<void> {
     if (!this.connected) return;
     if (isTyping) {
-      process.stdout.write('...\r');
+      this.renderer?.startWaiting('thinking');
+      return;
     }
+    this.renderer?.stopWaiting();
   }
 
   async disconnect(): Promise<void> {
-    this.rl?.close();
+    await this.input?.close();
     this.connected = false;
   }
 }

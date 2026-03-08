@@ -13,6 +13,57 @@ vi.mock('./logger.js', () => ({
 
 import { startCredentialProxy } from './credential-proxy.js';
 
+function isLoopbackPermissionError(err: unknown): boolean {
+  if (!err || typeof err !== 'object' || !('code' in err)) return false;
+  return err.code === 'EPERM' || err.code === 'EACCES';
+}
+
+function listenServer(
+  server: http.Server,
+  host = '127.0.0.1',
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.off('listening', onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve();
+    };
+
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(0, host);
+  });
+}
+
+function closeServer(server: http.Server | undefined): Promise<void> {
+  if (!server) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    server.close(() => resolve());
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+  });
+}
+
+async function canListenOnLoopback(): Promise<boolean> {
+  const server = http.createServer();
+  try {
+    await listenServer(server);
+    await closeServer(server);
+    return true;
+  } catch (err) {
+    if (isLoopbackPermissionError(err)) {
+      await closeServer(server);
+      return false;
+    }
+    await closeServer(server);
+    throw err;
+  }
+}
+
 function makeRequest(
   port: number,
   options: http.RequestOptions,
@@ -24,7 +75,7 @@ function makeRequest(
 }> {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { ...options, hostname: '127.0.0.1', port },
+      { ...options, agent: false, hostname: '127.0.0.1', port },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (c) => chunks.push(c));
@@ -43,9 +94,12 @@ function makeRequest(
   });
 }
 
-describe('credential-proxy', () => {
-  let proxyServer: http.Server;
-  let upstreamServer: http.Server;
+const loopbackAvailable = await canListenOnLoopback();
+const describeCredentialProxy = loopbackAvailable ? describe : describe.skip;
+
+describeCredentialProxy('credential-proxy', () => {
+  let proxyServer: http.Server | undefined;
+  let upstreamServer: http.Server | undefined;
   let proxyPort: number;
   let upstreamPort: number;
   let lastUpstreamHeaders: http.IncomingHttpHeaders;
@@ -58,15 +112,15 @@ describe('credential-proxy', () => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ ok: true }));
     });
-    await new Promise<void>((resolve) =>
-      upstreamServer.listen(0, '127.0.0.1', resolve),
-    );
+    await listenServer(upstreamServer);
     upstreamPort = (upstreamServer.address() as AddressInfo).port;
   });
 
   afterEach(async () => {
-    await new Promise<void>((r) => proxyServer?.close(() => r()));
-    await new Promise<void>((r) => upstreamServer?.close(() => r()));
+    await closeServer(proxyServer);
+    await closeServer(upstreamServer);
+    proxyServer = undefined;
+    upstreamServer = undefined;
     for (const key of Object.keys(mockEnv)) delete mockEnv[key];
   });
 

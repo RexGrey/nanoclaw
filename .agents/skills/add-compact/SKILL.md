@@ -5,40 +5,36 @@ description: Add /compact command for manual context compaction. Solves context 
 
 # Add /compact Command
 
-Adds a `/compact` session command that compacts conversation history to fight context rot in long-running sessions. Uses the Claude Agent SDK's built-in `/compact` slash command — no synthetic system prompts.
+Adds a `/compact` session command that compacts conversation history to fight context rot in long-running sessions. Uses the Codex Agent SDK's built-in `/compact` slash command — no synthetic system prompts.
 
 **Session contract:** `/compact` keeps the same logical session alive. The SDK returns a new session ID after compaction (via the `init` system message), which the agent-runner forwards to the orchestrator as `newSessionId`. No destructive reset occurs — the agent retains summarized context.
 
 ## Phase 1: Pre-flight
 
-Read `.nanoclaw/state.yaml`. If `add-compact` is in `applied_skills`, skip to Phase 3 (Verify).
+Check if `src/session-commands.ts` exists:
+
+```bash
+test -f src/session-commands.ts && echo "Already applied" || echo "Not applied"
+```
+
+If already applied, skip to Phase 3 (Verify).
 
 ## Phase 2: Apply Code Changes
 
-### Initialize skills system (if needed)
-
-If `.nanoclaw/` directory doesn't exist:
+Merge the skill branch:
 
 ```bash
-npx tsx scripts/apply-skill.ts --init
+git fetch upstream skill/compact
+git merge upstream/skill/compact
 ```
 
-### Apply the skill
+> **Note:** `upstream` is the remote pointing to `qwibitai/nanoclaw`. If using a different remote name, substitute accordingly.
 
-```bash
-npx tsx scripts/apply-skill.ts .claude/skills/add-compact
-```
-
-This deterministically:
-- Adds `src/session-commands.ts` (extract and authorize session commands)
-- Adds `src/session-commands.test.ts` (unit tests for command parsing and auth)
-- Three-way merges session command interception into `src/index.ts` (both `processGroupMessages` and `startMessageLoop`)
-- Three-way merges slash command handling into `container/agent-runner/src/index.ts`
-- Records application in `.nanoclaw/state.yaml`
-
-If merge conflicts occur, read the intent files:
-- `modify/src/index.ts.intent.md`
-- `modify/container/agent-runner/src/index.ts.intent.md`
+This adds:
+- `src/session-commands.ts` (extract and authorize session commands)
+- `src/session-commands.test.ts` (unit tests for command parsing and auth)
+- Session command interception in `src/index.ts` (both `processGroupMessages` and `startMessageLoop`)
+- Slash command handling in `container/agent-runner/src/index.ts`
 
 ### Validate
 
@@ -107,7 +103,7 @@ launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # macOS
 ```bash
 git clone <your-fork> /tmp/nanoclaw-test
 cd /tmp/nanoclaw-test
-claude  # then run /add-compact
+Codex  # then run /add-compact
 npm run build
 npm test
 ./container/build.sh

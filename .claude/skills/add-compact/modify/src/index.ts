@@ -1,19 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import readline from 'readline';
 
 import {
   ASSISTANT_NAME,
-  CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
-  TELEGRAM_BOT_POOL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
-import { startCliApi, CLI_API_PORT } from './cli-api.js';
-import { CliBufferChannel, isBufferedCliJid } from './channels/cli-buffer.js';
-import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -28,10 +22,8 @@ import {
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
-  PROXY_BIND_HOST,
 } from './container-runtime.js';
 import {
-  deleteRegisteredGroupsByPrefix,
   getAllChats,
   getAllRegisteredGroups,
   getAllSessions,
@@ -49,7 +41,6 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
-import { initBotPool } from './channels/telegram.js';
 import { startIpcWatcher } from './ipc.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import {
@@ -58,6 +49,7 @@ import {
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
+import { extractSessionCommand, handleSessionCommand, isSessionCommandAllowed } from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -96,7 +88,7 @@ function saveState(): void {
   setRouterState('last_agent_timestamp', JSON.stringify(lastAgentTimestamp));
 }
 
-function registerRuntimeGroup(jid: string, group: RegisteredGroup): void {
+function registerGroup(jid: string, group: RegisteredGroup): void {
   let groupDir: string;
   try {
     groupDir = resolveGroupFolderPath(group.folder);
@@ -109,30 +101,14 @@ function registerRuntimeGroup(jid: string, group: RegisteredGroup): void {
   }
 
   registeredGroups[jid] = group;
+  setRegisteredGroup(jid, group);
 
   // Create group folder
   fs.mkdirSync(path.join(groupDir, 'logs'), { recursive: true });
 
   logger.info(
     { jid, name: group.name, folder: group.folder },
-    'Runtime group registered',
-  );
-}
-
-function unregisterRuntimeGroup(jid: string): void {
-  if (!registeredGroups[jid]) return;
-  delete registeredGroups[jid];
-  delete lastAgentTimestamp[jid];
-  saveState();
-  logger.info({ jid }, 'Runtime group unregistered');
-}
-
-function registerGroup(jid: string, group: RegisteredGroup): void {
-  registerRuntimeGroup(jid, group);
-  setRegisteredGroup(jid, group);
-  logger.info(
-    { jid, name: group.name, folder: group.folder },
-    'Persisted group registered',
+    'Group registered',
   );
 }
 
@@ -186,6 +162,33 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   if (missedMessages.length === 0) return true;
 
+  // --- Session command interception (before trigger check) ---
+  const cmdResult = await handleSessionCommand({
+    missedMessages,
+    isMainGroup,
+    groupName: group.name,
+    triggerPattern: TRIGGER_PATTERN,
+    timezone: TIMEZONE,
+    deps: {
+      sendMessage: (text) => channel.sendMessage(chatJid, text),
+      setTyping: (typing) => channel.setTyping?.(chatJid, typing) ?? Promise.resolve(),
+      runAgent: (prompt, onOutput) => runAgent(group, prompt, chatJid, onOutput),
+      closeStdin: () => queue.closeStdin(chatJid),
+      advanceCursor: (ts) => { lastAgentTimestamp[chatJid] = ts; saveState(); },
+      formatMessages,
+      canSenderInteract: (msg) => {
+        const hasTrigger = TRIGGER_PATTERN.test(msg.content.trim());
+        const reqTrigger = !isMainGroup && group.requiresTrigger !== false;
+        return isMainGroup || !reqTrigger || (hasTrigger && (
+          msg.is_from_me ||
+          isTriggerAllowed(chatJid, msg.sender, loadSenderAllowlist())
+        ));
+      },
+    },
+  });
+  if (cmdResult.handled) return cmdResult.success;
+  // --- End session command interception ---
+
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const allowlistCfg = loadSenderAllowlist();
@@ -194,7 +197,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         TRIGGER_PATTERN.test(m.content.trim()) &&
         (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
-    if (!hasTrigger) return true;
+    if (!hasTrigger) {
+      return true;
+    }
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -228,8 +233,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
-  const cliOutputChunks: string[] = [];
-  const isCliSession = isBufferedCliJid(chatJid);
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -242,12 +245,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        if (isCliSession) {
-          cliOutputChunks.push(text);
-        } else {
-          await channel.sendMessage(chatJid, text);
-          outputSentToUser = true;
-        }
+        await channel.sendMessage(chatJid, text);
+        outputSentToUser = true;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -264,11 +263,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
-
-  if (output !== 'error' && !hadError && isCliSession && cliOutputChunks.length > 0) {
-    await channel.sendMessage(chatJid, cliOutputChunks.join('\n'));
-    outputSentToUser = true;
-  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -421,6 +415,28 @@ async function startMessageLoop(): Promise<void> {
           }
 
           const isMainGroup = group.isMain === true;
+
+          // --- Session command interception (message loop) ---
+          // Scan ALL messages in the batch for a session command.
+          const loopCmdMsg = groupMessages.find(
+            (m) => extractSessionCommand(m.content, TRIGGER_PATTERN) !== null,
+          );
+
+          if (loopCmdMsg) {
+            // Only close active container if the sender is authorized — otherwise an
+            // untrusted user could kill in-flight work by sending /compact (DoS).
+            // closeStdin no-ops internally when no container is active.
+            if (isSessionCommandAllowed(isMainGroup, loopCmdMsg.is_from_me === true)) {
+              queue.closeStdin(chatJid);
+            }
+            // Enqueue so processGroupMessages handles auth + cursor advancement.
+            // Don't pipe via IPC — slash commands need a fresh container with
+            // string prompt (not MessageStream) for SDK recognition.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
+          // --- End session command interception ---
+
           const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           // For non-main groups, only act on trigger messages.
@@ -501,36 +517,18 @@ function ensureContainerSystemRunning(): void {
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
-  const cleanedCliGroups = deleteRegisteredGroupsByPrefix('cli:');
-  if (cleanedCliGroups > 0) {
-    logger.warn(
-      { removedCount: cleanedCliGroups },
-      'Removed persisted legacy cli:* groups. If a real group was previously replaced, re-register it manually.',
-    );
-  }
   logger.info('Database initialized');
   loadState();
-
-  // Start credential proxy (containers route API calls through this)
-  const proxyServer = await startCredentialProxy(
-    CREDENTIAL_PROXY_PORT,
-    PROXY_BIND_HOST,
-  );
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
-    cliApiServer?.close();
-    proxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
-
-  // CLI API server placeholder — started after channels connect
-  let cliApiServer: import('http').Server;
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
@@ -582,94 +580,6 @@ async function main(): Promise<void> {
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
-  }
-
-  // Auto-register CLI group if CLI channel is active
-  const cliChannel = channels.find((ch) => ch.name === 'cli');
-  if (cliChannel && cliChannel.isConnected()) {
-    let bridgeJid = process.env.NANOCLAW_CLI_GROUP;
-
-    // Interactive group selection if no env var specified
-    if (!bridgeJid) {
-      const existingGroups = Object.entries(registeredGroups);
-      if (existingGroups.length > 0) {
-        console.log('\n选择群组：');
-        console.log('  0. 独立模式（新建 CLI 群组）');
-        existingGroups.forEach(([_jid, group], i) => {
-          console.log(`  ${i + 1}. ${group.name} [${group.folder}]`);
-        });
-        console.log('');
-
-        const choice = await new Promise<string>((resolve) => {
-          const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-          });
-          rl.question('输入编号: ', (answer) => {
-            rl.close();
-            resolve(answer.trim());
-          });
-        });
-
-        const idx = parseInt(choice, 10);
-        if (idx > 0 && idx <= existingGroups.length) {
-          bridgeJid = existingGroups[idx - 1][0];
-        }
-      }
-    }
-
-    if (bridgeJid && registeredGroups[bridgeJid]) {
-      // Bridge mode: reuse existing group's folder
-      const target = registeredGroups[bridgeJid];
-      registerRuntimeGroup('cli:default', {
-        ...target,
-        requiresTrigger: false,
-      });
-      console.log(`\n已桥接到: ${target.name}\n`);
-      logger.info(
-        { bridgeJid, folder: target.folder },
-        'CLI bridged to existing group',
-      );
-    } else if (bridgeJid && !registeredGroups[bridgeJid]) {
-      logger.warn(
-        { bridgeJid },
-        'NANOCLAW_CLI_GROUP not found, falling back to standalone',
-      );
-    }
-    if (!registeredGroups['cli:default']) {
-      registerRuntimeGroup('cli:default', {
-        name: 'CLI',
-        folder: 'cli_default',
-        trigger: 'direct input (no trigger needed)',
-        added_at: new Date().toISOString(),
-        requiresTrigger: false,
-      });
-    }
-
-    // Now start the CLI prompt
-    (cliChannel as { startPrompt?: () => void }).startPrompt?.();
-  }
-
-  // Start CLI API (hot-plug: CLI client connects here without stopping service)
-  const bufferChannel = channels.find(
-    (ch) => ch instanceof CliBufferChannel,
-  ) as CliBufferChannel | undefined;
-  if (bufferChannel) {
-    cliApiServer = await startCliApi({
-      registeredGroups: () => registeredGroups,
-      registerRuntimeGroup,
-      unregisterRuntimeGroup,
-      onMessage: (_chatJid, msg) => storeMessage(msg),
-      onChatMetadata: (chatJid, timestamp, name, channel, isGroup) =>
-        storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
-      bufferChannel,
-    });
-    logger.info({ port: CLI_API_PORT }, 'CLI hot-plug API ready');
-  }
-
-  // Initialize Telegram bot pool for agent teams (swarm mode)
-  if (TELEGRAM_BOT_POOL.length > 0) {
-    await initBotPool(TELEGRAM_BOT_POOL);
   }
 
   // Start subsystems (independently of connection handler)

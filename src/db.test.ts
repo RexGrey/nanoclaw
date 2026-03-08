@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _initTestDatabase,
   createTask,
+  deleteRegisteredGroupsByPrefix,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
@@ -137,6 +138,37 @@ describe('storeMessage', () => {
     );
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe('updated');
+  });
+});
+
+describe('deleteRegisteredGroupsByPrefix', () => {
+  it('removes only matching registered groups', () => {
+    setRegisteredGroup('cli:http:one', {
+      name: 'CLI One',
+      folder: 'alpha',
+      trigger: 'cli',
+      added_at: '2024-01-01T00:00:00.000Z',
+      requiresTrigger: false,
+    });
+    setRegisteredGroup('tg:alpha', {
+      name: 'Alpha',
+      folder: 'alpha-real',
+      trigger: '@bot',
+      added_at: '2024-01-01T00:00:00.000Z',
+      requiresTrigger: true,
+    });
+    setRegisteredGroup('cli:http:two', {
+      name: 'CLI Two',
+      folder: 'beta',
+      trigger: 'cli',
+      added_at: '2024-01-01T00:00:00.000Z',
+      requiresTrigger: false,
+    });
+
+    const deleted = deleteRegisteredGroupsByPrefix('cli:');
+
+    expect(deleted).toBe(2);
+    expect(Object.keys(getAllRegisteredGroups())).toEqual(['tg:alpha']);
   });
 });
 
