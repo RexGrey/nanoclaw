@@ -540,6 +540,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Initialize Telegram bot pool for agent teams (swarm mode)
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    await initBotPool(TELEGRAM_BOT_POOL);
+  }
+
+
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
