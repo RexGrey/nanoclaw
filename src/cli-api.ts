@@ -26,6 +26,7 @@ import {
 
 import { ASSISTANT_NAME } from './config.js';
 import { logger } from './logger.js';
+import { getChatHistory } from './db.js';
 import { RegisteredGroup, NewMessage } from './types.js';
 import type { CliBufferChannel } from './channels/cli-buffer.js';
 
@@ -101,6 +102,22 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
             folder: g.folder,
           }));
         json(res, 200, { groups: list });
+        return;
+      }
+
+      // GET /history?limit=N — recent CLI conversation history
+      if (req.url?.startsWith('/history') && req.method === 'GET') {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+        const messages = getChatHistory(CLI_JID, limit);
+        json(res, 200, {
+          messages: messages.map((m: NewMessage) => ({
+            sender: m.sender_name,
+            content: m.content,
+            timestamp: m.timestamp,
+            is_from_me: m.is_from_me,
+          })),
+        });
         return;
       }
 

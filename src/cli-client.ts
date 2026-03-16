@@ -120,6 +120,36 @@ async function main(): Promise<void> {
       process.exit(0);
     }
 
+    if (content.startsWith('/history')) {
+      const parts = content.split(/\s+/);
+      const limit = parseInt(parts[1], 10) || 20;
+      try {
+        const data = (await fetchJson(`/history?limit=${limit}`)) as {
+          messages: Array<{
+            sender: string;
+            content: string;
+            timestamp: string;
+            is_from_me: boolean;
+          }>;
+        };
+        if (data.messages.length === 0) {
+          console.log('\n暂无对话历史\n');
+        } else {
+          console.log(`\n--- 最近 ${data.messages.length} 条 ---\n`);
+          for (const m of data.messages) {
+            const time = m.timestamp.replace('T', ' ').slice(0, 19);
+            const label = m.is_from_me ? 'Andy' : 'You';
+            console.log(`[${time}] ${label}: ${m.content}`);
+          }
+          console.log('\n--- 结束 ---\n');
+        }
+      } catch (err) {
+        console.error(`\n错误: ${err}\n`);
+      }
+      rl.prompt();
+      return;
+    }
+
     process.stdout.write('...\n');
 
     try {
