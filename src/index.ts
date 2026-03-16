@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
 
 import {
   ASSISTANT_NAME,
@@ -544,21 +545,74 @@ async function main(): Promise<void> {
 
   // Auto-register CLI group if CLI channel is active
   const cliChannel = channels.find((ch) => ch.name === 'cli');
-  if (cliChannel && cliChannel.isConnected() && !registeredGroups['cli:default']) {
-    registerGroup('cli:default', {
-      name: 'CLI',
-      folder: 'cli_default',
-      trigger: 'direct input (no trigger needed)',
-      added_at: new Date().toISOString(),
-      requiresTrigger: false,
-    });
+  if (cliChannel && cliChannel.isConnected()) {
+    let bridgeJid = process.env.NANOCLAW_CLI_GROUP;
+
+    // Interactive group selection if no env var specified
+    if (!bridgeJid) {
+      const existingGroups = Object.entries(registeredGroups);
+      if (existingGroups.length > 0) {
+        console.log('\n选择群组：');
+        console.log('  0. 独立模式（新建 CLI 群组）');
+        existingGroups.forEach(([_jid, group], i) => {
+          console.log(`  ${i + 1}. ${group.name} [${group.folder}]`);
+        });
+        console.log('');
+
+        const choice = await new Promise<string>((resolve) => {
+          const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+          });
+          rl.question('输入编号: ', (answer) => {
+            rl.close();
+            resolve(answer.trim());
+          });
+        });
+
+        const idx = parseInt(choice, 10);
+        if (idx > 0 && idx <= existingGroups.length) {
+          bridgeJid = existingGroups[idx - 1][0];
+        }
+      }
+    }
+
+    if (bridgeJid && registeredGroups[bridgeJid]) {
+      // Bridge mode: reuse existing group's folder
+      const target = registeredGroups[bridgeJid];
+      registeredGroups['cli:default'] = {
+        ...target,
+        requiresTrigger: false,
+      };
+      console.log(`\n已桥接到: ${target.name}\n`);
+      logger.info(
+        { bridgeJid, folder: target.folder },
+        'CLI bridged to existing group',
+      );
+    } else if (bridgeJid && !registeredGroups[bridgeJid]) {
+      logger.warn(
+        { bridgeJid },
+        'NANOCLAW_CLI_GROUP not found, falling back to standalone',
+      );
+    }
+    if (!registeredGroups['cli:default']) {
+      registerGroup('cli:default', {
+        name: 'CLI',
+        folder: 'cli_default',
+        trigger: 'direct input (no trigger needed)',
+        added_at: new Date().toISOString(),
+        requiresTrigger: false,
+      });
+    }
+
+    // Now start the CLI prompt
+    (cliChannel as { startPrompt?: () => void }).startPrompt?.();
   }
 
   // Initialize Telegram bot pool for agent teams (swarm mode)
   if (TELEGRAM_BOT_POOL.length > 0) {
     await initBotPool(TELEGRAM_BOT_POOL);
   }
-
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

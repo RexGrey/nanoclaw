@@ -1,6 +1,7 @@
 import readline from 'readline';
 import crypto from 'crypto';
 import { registerChannel } from './registry.js';
+import { ASSISTANT_NAME } from '../config.js';
 import { Channel, NewMessage } from '../types.js';
 import type { ChannelOpts } from './registry.js';
 
@@ -15,14 +16,13 @@ class CliChannel implements Channel {
     this.opts = opts;
   }
 
-  async connect(): Promise<void> {
+  /** Call after group selection menu to create readline and start accepting input */
+  startPrompt(): void {
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
-      prompt: '> ',
+      prompt: 'You: ',
     });
-
-    this.connected = true;
 
     this.rl.prompt();
 
@@ -56,10 +56,15 @@ class CliChannel implements Channel {
     });
   }
 
+  async connect(): Promise<void> {
+    // Just mark as connected; readline is created later by startPrompt()
+    this.connected = true;
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.connected) return;
     const prefix = jid !== this.jid ? `[${jid}] ` : '';
-    console.log(`\n${prefix}${text}\n`);
+    console.log(`\n${prefix}${ASSISTANT_NAME}: ${text}\n`);
     this.rl?.prompt();
   }
 
