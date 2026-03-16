@@ -2,6 +2,11 @@
  * Lightweight HTTP API for the CLI client to communicate with the running
  * NanoClaw process without stopping it.
  *
+ * Uses a `cli:api` JID mapped to the target group's folder so that:
+ * - Messages go through the normal message loop
+ * - Responses route to the CliBufferChannel (not Telegram)
+ * - Files and CLAUDE.md are shared with the target group
+ *
  * Endpoints:
  *   GET  /groups           — list registered groups
  *   POST /message          — send a message, poll for response
@@ -21,8 +26,8 @@ import {
 
 import { ASSISTANT_NAME } from './config.js';
 import { logger } from './logger.js';
-import { getMessagesSince } from './db.js';
 import { RegisteredGroup, NewMessage } from './types.js';
+import type { CliBufferChannel } from './channels/cli-buffer.js';
 
 export const CLI_API_PORT = parseInt(process.env.CLI_API_PORT || '3002', 10);
 export const CLI_API_TOKEN = crypto.randomUUID();
@@ -33,8 +38,11 @@ fs.mkdirSync(path.dirname(TOKEN_FILE), { recursive: true });
 fs.writeFileSync(TOKEN_FILE, CLI_API_TOKEN, { mode: 0o600 });
 export { TOKEN_FILE };
 
+const CLI_JID = 'cli:api';
+
 interface CliApiDeps {
   registeredGroups: () => Record<string, RegisteredGroup>;
+  registerGroup: (jid: string, group: RegisteredGroup) => void;
   onMessage: (chatJid: string, msg: NewMessage) => void;
   onChatMetadata: (
     chatJid: string,
@@ -43,6 +51,7 @@ interface CliApiDeps {
     channel?: string,
     isGroup?: boolean,
   ) => void;
+  bufferChannel: CliBufferChannel;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -81,14 +90,16 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
         return;
       }
 
-      // GET /groups
+      // GET /groups — only return non-cli groups (real channels)
       if (req.url === '/groups' && req.method === 'GET') {
         const groups = deps.registeredGroups();
-        const list = Object.entries(groups).map(([jid, g]) => ({
-          jid,
-          name: g.name,
-          folder: g.folder,
-        }));
+        const list = Object.entries(groups)
+          .filter(([jid]) => !jid.startsWith('cli:'))
+          .map(([jid, g]) => ({
+            jid,
+            name: g.name,
+            folder: g.folder,
+          }));
         json(res, 200, { groups: list });
         return;
       }
@@ -108,30 +119,47 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
           }
 
           const groups = deps.registeredGroups();
-          const group = groups[group_jid];
-          if (!group) {
+          const targetGroup = groups[group_jid];
+          if (!targetGroup) {
             json(res, 404, { error: 'Group not found' });
             return;
           }
 
+          // Register cli:api group bridged to target folder (once)
+          if (!groups[CLI_JID]) {
+            deps.registerGroup(CLI_JID, {
+              name: `CLI → ${targetGroup.name}`,
+              folder: targetGroup.folder,
+              trigger: 'CLI API (no trigger)',
+              added_at: new Date().toISOString(),
+              requiresTrigger: false,
+            });
+          }
+
           const timestamp = new Date().toISOString();
 
-          // Store chat metadata
-          deps.onChatMetadata(group_jid, timestamp, group.name, 'cli', false);
+          // Store chat metadata under cli:api JID
+          deps.onChatMetadata(
+            CLI_JID,
+            timestamp,
+            `CLI → ${targetGroup.name}`,
+            'cli',
+            false,
+          );
 
-          // Create and store message
+          // Create and store message under cli:api JID
           const msg: NewMessage = {
             id: `cli-${crypto.randomUUID()}`,
-            chat_jid: group_jid,
+            chat_jid: CLI_JID,
             sender: 'cli-user',
             sender_name: 'User',
             content,
             timestamp,
             is_from_me: false,
           };
-          deps.onMessage(group_jid, msg);
+          deps.onMessage(CLI_JID, msg);
 
-          // Poll for agent response (max 120s)
+          // Poll buffer channel for agent response (max 120s)
           const startTime = Date.now();
           const timeout = 120_000;
           const pollInterval = 500;
@@ -139,20 +167,9 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
           const poll = (): Promise<string | null> =>
             new Promise((resolve) => {
               const check = () => {
-                const messages = getMessagesSince(
-                  group_jid,
-                  timestamp,
-                  ASSISTANT_NAME,
-                );
-                // Look for bot responses after our message
-                const botReply = messages.find(
-                  (m) =>
-                    m.sender_name === ASSISTANT_NAME &&
-                    m.timestamp >= timestamp &&
-                    m.id !== msg.id,
-                );
-                if (botReply) {
-                  resolve(botReply.content);
+                const responses = deps.bufferChannel.getResponses(CLI_JID);
+                if (responses.length > 0) {
+                  resolve(responses.join('\n'));
                   return;
                 }
                 if (Date.now() - startTime > timeout) {

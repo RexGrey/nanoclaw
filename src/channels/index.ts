@@ -10,6 +10,9 @@
 // cli
 import './cli.js';
 
+// cli-buffer (always active — HTTP API fallback for cli:* JIDs)
+import './cli-buffer.js';
+
 // telegram
 import './telegram.js';
 

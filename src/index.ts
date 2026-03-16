@@ -12,6 +12,7 @@ import {
   TRIGGER_PATTERN,
 } from './config.js';
 import { startCliApi, CLI_API_PORT } from './cli-api.js';
+import { CliBufferChannel } from './channels/cli-buffer.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -222,16 +223,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        // Store agent reply in DB (needed for CLI API polling)
-        storeMessage({
-          id: `agent-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          chat_jid: chatJid,
-          sender: 'assistant',
-          sender_name: ASSISTANT_NAME,
-          content: text,
-          timestamp: new Date().toISOString(),
-          is_from_me: true,
-        });
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
@@ -494,7 +485,7 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
-    cliApiServer.close();
+    cliApiServer?.close();
     proxyServer.close();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
@@ -503,16 +494,8 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 
-  // Start CLI API (hot-plug: CLI client connects here without stopping service)
-  const cliApiServer = await startCliApi({
-    registeredGroups: () => registeredGroups,
-    onMessage: (chatJid, msg) => {
-      storeMessage(msg);
-    },
-    onChatMetadata: (chatJid, timestamp, name, channel, isGroup) =>
-      storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
-  });
-  logger.info({ port: CLI_API_PORT }, 'CLI hot-plug API ready');
+  // CLI API server placeholder — started after channels connect
+  let cliApiServer: import('http').Server;
 
   // Channel callbacks (shared by all channels)
   const channelOpts = {
@@ -630,6 +613,22 @@ async function main(): Promise<void> {
 
     // Now start the CLI prompt
     (cliChannel as { startPrompt?: () => void }).startPrompt?.();
+  }
+
+  // Start CLI API (hot-plug: CLI client connects here without stopping service)
+  const bufferChannel = channels.find(
+    (ch) => ch instanceof CliBufferChannel,
+  ) as CliBufferChannel | undefined;
+  if (bufferChannel) {
+    cliApiServer = await startCliApi({
+      registeredGroups: () => registeredGroups,
+      registerGroup,
+      onMessage: (_chatJid, msg) => storeMessage(msg),
+      onChatMetadata: (chatJid, timestamp, name, channel, isGroup) =>
+        storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
+      bufferChannel,
+    });
+    logger.info({ port: CLI_API_PORT }, 'CLI hot-plug API ready');
   }
 
   // Initialize Telegram bot pool for agent teams (swarm mode)
