@@ -47,6 +47,22 @@ When you learn something important:
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## 微信公众号文章抓取
+
+当用户要求抓取微信公众号文章时，使用 agent-browser 通过搜狗微信搜索：
+
+1. `agent-browser open "https://weixin.sogou.com/weixin?type=1&query=公众号名称"` 搜索公众号
+2. 找到公众号后点击进入文章列表
+3. 逐篇打开文章，用 `agent-browser snapshot` 提取内容
+4. 将文章内容保存为 Markdown 文件到 `/workspace/group/articles/` 目录
+
+常用公众号：
+- 数字生命卡兹克：AI、技术、数字化相关内容
+
+如果搜狗搜索被限制，备选方案：
+- 直接搜索 `site:mp.weixin.qq.com 公众号名称` 通过其他搜索引擎
+- 用户提供具体文章链接时直接 `agent-browser open <url>` 读取
+
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:
