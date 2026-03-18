@@ -105,9 +105,24 @@ async function main(): Promise<void> {
     prompt: 'You: ',
   });
 
+  let multilineBuffer: string[] = [];
+
   rl.prompt();
 
   rl.on('line', async (line) => {
+    // Backslash continuation for multi-line input
+    if (line.endsWith('\\')) {
+      multilineBuffer.push(line.slice(0, -1));
+      process.stdout.write('  > ');
+      return;
+    }
+
+    if (multilineBuffer.length > 0) {
+      multilineBuffer.push(line);
+      line = multilineBuffer.join('\n');
+      multilineBuffer = [];
+    }
+
     const content = line.trim();
     if (!content) {
       rl.prompt();

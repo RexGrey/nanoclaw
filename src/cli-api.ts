@@ -176,9 +176,9 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
           };
           deps.onMessage(CLI_JID, msg);
 
-          // Poll buffer channel for agent response (max 120s)
+          // Poll buffer channel for agent response (max 300s)
           const startTime = Date.now();
-          const timeout = 120_000;
+          const timeout = 300_000;
           const pollInterval = 500;
 
           const poll = (): Promise<string | null> =>
