@@ -145,6 +145,26 @@ export function initDatabase(): void {
   const dbPath = path.join(STORE_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
+  // Auto-backup: keep last 3 copies, rotate on startup
+  if (fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0) {
+    const backupDir = path.join(STORE_DIR, 'backups');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupPath = path.join(backupDir, `messages-${timestamp}.db`);
+    fs.copyFileSync(dbPath, backupPath);
+
+    // Keep only the 3 most recent backups
+    const backups = fs
+      .readdirSync(backupDir)
+      .filter((f) => f.startsWith('messages-') && f.endsWith('.db'))
+      .sort()
+      .reverse();
+    for (const old of backups.slice(3)) {
+      fs.unlinkSync(path.join(backupDir, old));
+    }
+    logger.info({ backupPath }, 'Database backed up');
+  }
+
   db = new Database(dbPath);
   createSchema(db);
 
@@ -364,7 +384,10 @@ export function getMessagesSince(
 }
 
 /** Get recent messages for a chat (all messages, no filtering) */
-export function getChatHistory(chatJid: string, limit: number = 20): NewMessage[] {
+export function getChatHistory(
+  chatJid: string,
+  limit: number = 20,
+): NewMessage[] {
   const sql = `
     SELECT * FROM (
       SELECT id, chat_jid, sender, sender_name, content, timestamp, is_from_me
