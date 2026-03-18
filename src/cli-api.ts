@@ -26,7 +26,7 @@ import {
 
 import { ASSISTANT_NAME } from './config.js';
 import { logger } from './logger.js';
-import { getChatHistory } from './db.js';
+import { getChatHistory, storeMessage } from './db.js';
 import { RegisteredGroup, NewMessage } from './types.js';
 import type { CliBufferChannel } from './channels/cli-buffer.js';
 
@@ -200,6 +200,16 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
 
           const reply = await poll();
           if (reply) {
+            // Store agent reply in DB so /history can show it
+            storeMessage({
+              id: `cli-reply-${crypto.randomUUID()}`,
+              chat_jid: CLI_JID,
+              sender: ASSISTANT_NAME,
+              sender_name: ASSISTANT_NAME,
+              content: reply,
+              timestamp: new Date().toISOString(),
+              is_from_me: true,
+            });
             json(res, 200, { reply, sender: ASSISTANT_NAME });
           } else {
             json(res, 504, { error: 'Agent did not respond in time' });
