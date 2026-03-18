@@ -91,16 +91,16 @@ export function startCliApi(deps: CliApiDeps): Promise<Server> {
         return;
       }
 
-      // GET /groups — only return non-cli groups (real channels)
+      // GET /groups — return all groups, deduplicated by folder
       if (req.url === '/groups' && req.method === 'GET') {
         const groups = deps.registeredGroups();
-        const list = Object.entries(groups)
-          .filter(([jid]) => !jid.startsWith('cli:'))
-          .map(([jid, g]) => ({
-            jid,
-            name: g.name,
-            folder: g.folder,
-          }));
+        const seen = new Set<string>();
+        const list: Array<{ jid: string; name: string; folder: string }> = [];
+        for (const [jid, g] of Object.entries(groups)) {
+          if (seen.has(g.folder)) continue;
+          seen.add(g.folder);
+          list.push({ jid, name: g.name, folder: g.folder });
+        }
         json(res, 200, { groups: list });
         return;
       }
