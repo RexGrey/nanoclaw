@@ -165,6 +165,8 @@ async function main(): Promise<void> {
       return;
     }
 
+    // Pause input while waiting for agent response
+    rl.pause();
     process.stdout.write('...\n');
 
     try {
@@ -178,6 +180,7 @@ async function main(): Promise<void> {
       console.error(`\n错误: ${err}\n`);
     }
 
+    rl.resume();
     rl.prompt();
   });
 
