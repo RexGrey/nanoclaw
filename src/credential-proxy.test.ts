@@ -18,10 +18,7 @@ function isLoopbackPermissionError(err: unknown): boolean {
   return err.code === 'EPERM' || err.code === 'EACCES';
 }
 
-function listenServer(
-  server: http.Server,
-  host = '127.0.0.1',
-): Promise<void> {
+function listenServer(server: http.Server, host = '127.0.0.1'): Promise<void> {
   return new Promise((resolve, reject) => {
     const onError = (err: Error) => {
       server.off('listening', onListening);

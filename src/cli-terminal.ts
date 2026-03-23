@@ -334,7 +334,8 @@ export class InputController implements TerminalInputPort {
 
     const lines = text.split('\n');
     this.multilineBuffer = lines.length > 1 ? lines.slice(0, -1) : [];
-    this.prompt = this.multilineBuffer.length > 0 ? CONTINUATION_PROMPT : DEFAULT_PROMPT;
+    this.prompt =
+      this.multilineBuffer.length > 0 ? CONTINUATION_PROMPT : DEFAULT_PROMPT;
     this.rl.setPrompt(this.prompt);
     this.clearVisibleInput();
     this.rl.prompt();
@@ -345,8 +346,8 @@ export class InputController implements TerminalInputPort {
 
   private getCursor(): number {
     if (!this.rl) return 0;
-    return typeof (this.rl as readline.Interface & { cursor?: number }).cursor ===
-      'number'
+    return typeof (this.rl as readline.Interface & { cursor?: number })
+      .cursor === 'number'
       ? ((this.rl as readline.Interface & { cursor?: number }).cursor as number)
       : (this.rl.line || '').length;
   }
@@ -569,7 +570,10 @@ export class CliTerminalApp {
     this.input.lock();
     this.renderer.startWaiting('waiting');
     try {
-      const reply = await this.api.sendMessage(this.session.session_id, content);
+      const reply = await this.api.sendMessage(
+        this.session.session_id,
+        content,
+      );
       this.renderer.message(reply.sender, reply.reply);
     } catch (err) {
       this.renderer.error(this.formatError(err));

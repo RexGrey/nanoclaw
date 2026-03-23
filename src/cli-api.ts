@@ -196,7 +196,10 @@ export function createCliApi(
     }
 
     const method = request.method || 'GET';
-    const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    const url = new URL(
+      request.url || '/',
+      `http://${request.headers.host || 'localhost'}`,
+    );
 
     if (url.pathname === '/health' && method === 'GET') {
       return jsonResponse(200, { ok: true });
@@ -268,7 +271,9 @@ export function createCliApi(
     }
 
     if (url.pathname.startsWith('/sessions/') && method === 'DELETE') {
-      const sessionId = decodeURIComponent(url.pathname.slice('/sessions/'.length));
+      const sessionId = decodeURIComponent(
+        url.pathname.slice('/sessions/'.length),
+      );
       const session = sessions.get(sessionId);
       if (session) {
         deps.bufferChannel.clearResponses(session.cliJid);
@@ -313,7 +318,9 @@ export function createCliApi(
         const content = body?.content?.trim();
 
         if (!sessionId || !content) {
-          return jsonResponse(400, { error: 'session_id and content required' });
+          return jsonResponse(400, {
+            error: 'session_id and content required',
+          });
         }
 
         session = sessions.get(sessionId);
@@ -400,7 +407,9 @@ export function startCliApi(
           url: req.url || '/',
           headers: normalizeHeaders(req.headers),
           body:
-            req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH'
+            req.method === 'POST' ||
+            req.method === 'PUT' ||
+            req.method === 'PATCH'
               ? await readBody(req)
               : undefined,
         });

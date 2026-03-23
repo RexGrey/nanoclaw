@@ -265,7 +265,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
-  if (output !== 'error' && !hadError && isCliSession && cliOutputChunks.length > 0) {
+  if (
+    output !== 'error' &&
+    !hadError &&
+    isCliSession &&
+    cliOutputChunks.length > 0
+  ) {
     await channel.sendMessage(chatJid, cliOutputChunks.join('\n'));
     outputSentToUser = true;
   }

@@ -168,7 +168,10 @@ export function initDatabase(): void {
       }
       logger.info({ backupPath }, 'Database backed up');
     } catch (err) {
-      logger.warn({ dbPath, err }, 'Database backup failed; continuing startup');
+      logger.warn(
+        { dbPath, err },
+        'Database backup failed; continuing startup',
+      );
     }
   }
 

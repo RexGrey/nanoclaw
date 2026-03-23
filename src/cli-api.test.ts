@@ -70,11 +70,10 @@ describe('cli-api sessions', () => {
       json: unknown;
     }>;
   }> {
-    const [{ createCliApi }, { CliBufferChannel }] =
-      await Promise.all([
-        import('./cli-api.js'),
-        import('./channels/cli-buffer.js'),
-      ]);
+    const [{ createCliApi }, { CliBufferChannel }] = await Promise.all([
+      import('./cli-api.js'),
+      import('./channels/cli-buffer.js'),
+    ]);
 
     const registeredGroups = { ...realGroups };
     const bufferChannel = new CliBufferChannel();
@@ -130,8 +129,7 @@ describe('cli-api sessions', () => {
             authorization: `Bearer ${token}`,
             host: '127.0.0.1',
           },
-          body:
-            init.body === undefined ? undefined : JSON.stringify(init.body),
+          body: init.body === undefined ? undefined : JSON.stringify(init.body),
         });
         return {
           status: response.status,
@@ -162,10 +160,12 @@ describe('cli-api sessions', () => {
       name: 'Alpha',
       folder: 'alpha',
     });
-    expect(Object.keys(registeredGroups).some((jid) => jid.startsWith('cli:'))).toBe(
-      true,
+    expect(
+      Object.keys(registeredGroups).some((jid) => jid.startsWith('cli:')),
+    ).toBe(true);
+    expect(Object.keys(getAllRegisteredGroups()).sort()).toEqual(
+      persistedBefore,
     );
-    expect(Object.keys(getAllRegisteredGroups()).sort()).toEqual(persistedBefore);
 
     const groups = await request('/groups');
     const groupsBody = groups.json as {
